@@ -861,14 +861,18 @@ class FuzzyObj:
         for pair in transitionPairs.items():
             for Rminus in groupedByConsequent[pair[0]]:
                 for Rplus in groupedByConsequent[pair[1]]:
-                    printThis = False
-                    if Rminus == ['medium', 'medium', 'low', 'medium', 'low', 'medium', 'medium', 'low', 'low']:
-                        printThis = True
-
-                    AMinus = self.list_obj[U][Rminus[U]]  # B- for both
-                    APlus = self.list_obj[U][Rminus[U]]
-                    jaccardSimilarity = 0
-                    for i in range(len(Rminus) - 1):
+                    
+                    if not Rminus or not Rplus:
+                        break
+                 
+                    AMinus = self.list_obj[0][Rminus[0]]  
+                    APlus = self.list_obj[0][Rplus[0]]
+                    
+                    jaccardSimilarity = fuzz.fuzzy_similarity(
+                                AMinus.mf,
+                                APlus.mf
+                            )
+                    for i in range(1, len(Rminus) - 1):
                         if i != U:
                             AiMinus = self.list_obj[i][Rminus[i]]
                             AiPlus = self.list_obj[i][Rplus[i]]
@@ -880,13 +884,14 @@ class FuzzyObj:
 
                             AMinus &= AiMinus
                             APlus &= AiPlus
+                        
+                        elif i == U:
+                            AMinus &= self.list_obj[i][Rminus[i]]
+                            APlus &= self.list_obj[i][Rminus[i]]
 
                     jaccardSimilarity /= (len(Rminus) - 2)  # exclude consequent and u                    
-                    if printThis:
-                        print(jaccardSimilarity)
 
-                    from copy import copy
-                    trapConsequent = copy(delta_u_consequent[self.drs(pair[0], pair[1])])
+                    trapConsequent = delta_u_consequent[self.drs(pair[0], pair[1])]
                     trapmf = trapConsequent.mf
                     traptop = max(trapmf)
 
@@ -896,9 +901,13 @@ class FuzzyObj:
                     trapmf[trapmf > jaccardSimilarity] = jaccardSimilarity
 
                     if jaccardSimilarity > threshold: # only rules that will actually help. determined by threshold param
+                        print(Rminus)
                         TMRule = ctrl.Rule(AMinus, trapConsequent)
                         PMRule = ctrl.Rule(APlus, trapConsequent)
-                        rules += [TMRule, PMRule]
+                        rules += [
+                            TMRule, 
+                            PMRule,
+                        ]
 
         print(f"Jaccard similarities for {len(similarities)} rules")
         plt.hist(similarities)
