@@ -762,7 +762,6 @@ class FuzzyObj:
         """
         groupedByAntecedents = defaultdict(lambda: [None] * len(self.region_names))
         for rule in self.rule_base:
-            print(type(rule))
             consequent, antecedent, u_value = rule[-1], tuple(rule[:U] + rule[U + 1:-1]), rule[U]
             groupedByAntecedents[antecedent][self.region_names.index(consequent)] = rule
         return groupedByAntecedents
@@ -838,6 +837,8 @@ class FuzzyObj:
                                 delta_u_consequent
                             )
                         )
+                        print(descriptiveRules[i])
+        print(len(decisionRules))
         return decisionRules
 
     def generateDecisionControlSystem(self, transitionPairs, U, delta_u_consequent):
@@ -860,6 +861,9 @@ class FuzzyObj:
         for pair in transitionPairs.items():
             for Rminus in groupedByConsequent[pair[0]]:
                 for Rplus in groupedByConsequent[pair[1]]:
+                    printThis = False
+                    if Rminus == ['medium', 'medium', 'low', 'medium', 'low', 'medium', 'medium', 'low', 'low']:
+                        printThis = True
 
                     AMinus = self.list_obj[U][Rminus[U]]  # B- for both
                     APlus = self.list_obj[U][Rminus[U]]
@@ -877,7 +881,9 @@ class FuzzyObj:
                             AMinus &= AiMinus
                             APlus &= AiPlus
 
-                    jaccardSimilarity *= 1 / (len(Rminus) - 2)  # exclude consequent and u
+                    jaccardSimilarity /= (len(Rminus) - 2)  # exclude consequent and u                    
+                    if printThis:
+                        print(jaccardSimilarity)
 
                     from copy import copy
                     trapConsequent = copy(delta_u_consequent[self.drs(pair[0], pair[1])])
@@ -889,8 +895,7 @@ class FuzzyObj:
 
                     trapmf[trapmf > jaccardSimilarity] = jaccardSimilarity
 
-                    minTop = min(traptop, jaccardSimilarity)
-                    if minTop > threshold: # only rules that will actually help. determined by threshold param
+                    if jaccardSimilarity > threshold: # only rules that will actually help. determined by threshold param
                         TMRule = ctrl.Rule(AMinus, trapConsequent)
                         PMRule = ctrl.Rule(APlus, trapConsequent)
                         rules += [TMRule, PMRule]
