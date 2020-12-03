@@ -4,7 +4,9 @@ fuzzy_mining.py: Contains basic implementation of some fuzzy mining algorithms.
 @input: A dataframe contiaing your data.
 @output: A fuzzy rule base extracted from the input.
 
+@author: Shray Pungaliya, supervised by Mohammad Reza Rajati
 @author: Fanqing Xu, supervised by Mohammad Reza Rajati
+
 @reference: 
     Main ref. [The WM Method Completed: A Flexible Fuzzy System Approach 
 to Data Mining, Wang, 2003]
@@ -21,6 +23,14 @@ from skfuzzy import control as ctrl
 
 import time
 import warnings
+
+from collections import defaultdict
+
+import hashlib
+
+from os import path
+
+import pickle
 
 class FuzzyObj:
     """
@@ -69,7 +79,6 @@ class FuzzyObj:
         self.group = {}
         self.dict_obj = {}
         self.list_obj = []
-
 
     def __repr__(self):
         return "Dataset preview: {0}\n Names:{1}".format(self.dataset, self.names)
@@ -680,5 +689,233 @@ class FuzzyObj:
         print("{} final rules are built.".format(len(rule_base)))
         
         self.rule_base = rule_base
+
+
+    # Everything below this is for decision rules. Added by Shray Pungaliya (pungaliy@usc.edu)
+
+    # Everything below this line was authored by Shray Pungaliya
+
+    def drs(self, fromRegion, toRegion):
+        "Delta region string - generates the string for the transition regions"
+        return f'{fromRegion}To{toRegion}'
+
+    def getDefaultTransitionPairs(self):
+        """
+        Generates "default" transition pairs where each region name only transitions to the next
+        Only the final region name is different because it transitions to itself
+        """
+        pairs = {}
+        for i in range(len(self.region_names) - 1):
+            pairs[self.region_names[i]] = self.region_names[i + 1]
+        pairs[self.region_names[-1]] = self.region_names[-1]
+        return pairs
+
+    def genSubtractionConsequent(self, u_name, transition_pairs, saved_file_label):
+        """
+        Works under the assumption that the goal is the last region
+        Goes through each pair and does fuzzy subtraction for each of them
+        NOTE: Because fuzzy subtraction is slow, this function also has the side effect of saving its results
+              to a file. This way, if this function is rerun on the same parameters, the result is cached and
+              can be retrieved quickly
+        """
+
+        def fuzzySub(uAntecedent, fromRegion, toRegion):
+            return fuzz.fuzzy_sub(
+                uAntecedent.universe,
+                uAntecedent[toRegion].mf,
+                uAntecedent.universe,
+                uAntecedent[fromRegion].mf)
+
+        pairList = list(transition_pairs.items())
+
+        # Fuzzy subtraction is SLOW, so the end result of this function is saved for each set of pairs
+
+        hashed_pairs = str(hashlib.md5(str(pairList).encode('utf-8')).hexdigest())
+        filename = f'fuzzy_pairs_{saved_file_label}_{u_name}_{hashed_pairs}.pkl'
+        try:
+            with open(filename, 'rb') as file:
+                print("Retrieving saved fuzzy subtraction results")
+                return pickle.load(file)
+
+        except IOError:
+            print("Fuzzy subtraction is not precomputed. Computing and saving now. This may take a while")
+
+            uAntecedent = self.dict_obj[u_name]
+            fromRegion, toRegion = pairList[0]
+            deltaUniverse, sub = fuzzySub(uAntecedent, fromRegion, toRegion)
+            delta_u = ctrl.Consequent(deltaUniverse, 'delta_u')
+            delta_u[self.drs(fromRegion, toRegion)] = sub
+
+            # Create regions for the rest of the possible transitions
+            for fromRegion, toRegion in pairList[1:]:
+                delta_u[self.drs(fromRegion, toRegion)] = fuzzySub(uAntecedent, fromRegion, toRegion)[1]
+
+            with open(filename, 'wb') as file:
+                pickle.dump(delta_u, file, pickle.HIGHEST_PROTOCOL)
+                print("Saved fuzzy subtraction results")
+
+            return delta_u
+
+    def groupByAntecedents(self, U):
+        """
+        Group each descriptive rule by antecedent
+        """
+        groupedByAntecedents = defaultdict(lambda: [None] * len(self.region_names))
+        for rule in self.rule_base:
+            print(type(rule))
+            consequent, antecedent, u_value = rule[-1], tuple(rule[:U] + rule[U + 1:-1]), rule[U]
+            groupedByAntecedents[antecedent][self.region_names.index(consequent)] = rule
+        return groupedByAntecedents
+
+    def groupByConsequent(self, U):
+        """
+        Group each descriptive rule by consequent
+        """
+        groupedByConsequent = {region: [] for region in self.region_names}
+        for rule in self.rule_base:
+            consequent, antecedent, u_value = rule[-1], tuple(rule[:U] + rule[U + 1:-1]), rule[U]
+            groupedByConsequent[consequent].append(rule)
+        return groupedByConsequent
+
+    def acquireDefuzzDeltaUs(self, decisionControlSystem, X):
+        """
+        Find the appropriate delta_u's given the control system and X
+        """
+        decSimulation = ctrl.ControlSystemSimulation(decisionControlSystem)
+        delta_us = []
+        for x in X:
+            for i in range(len(self.names) - 1):
+                decSimulation.input[self.names[i]] = x[i]
+            try:
+                decSimulation.compute()
+                output = decSimulation.output['delta_u']
+                delta_us.append(output)
+            except:
+                delta_us.append(0)
+
+        return delta_us
+
+    def generateNewX(self, X, decisionControlSystem, U):
+        """
+        Given a decision control system and the consequent index U, calculate the values X should be changed to based
+        on the system
+        """
+        old_X = X
+        new_X = []
+        delta_us = self.acquireDefuzzDeltaUs(decisionControlSystem, X)
+        for i in range(len(old_X)):
+            new_X.append(old_X[i])
+            new_X[-1][U] += delta_us[i]
+        return new_X
+
+    def genDecisionRule(self, transitionPairs, decFrom, delta_u_consequent):
+        """
+        Based on the simple version of the WM algorithm
+        Generate a single decision rule given a descriptive rule as a starting point
+        """
+        antecedents = self.list_obj[0][decFrom[0]]
+        for i in range(1, len(decFrom) - 1):
+            antecedents &= self.list_obj[i][decFrom[i]]
+        fromRegion = decFrom[-1]
+        toRegion = transitionPairs[fromRegion]
+        return ctrl.Rule(antecedents, delta_u_consequent[self.drs(fromRegion, toRegion)])
+
+    def createDecisionRules(self, transitionPairs, groupedByAntecedent, delta_u_consequent):
+        """
+        Based on the simple version of the WM algorithm
+        Create all decision rules
+        """
+        decisionRules = []
+        regionNameLen = len(self.region_names)
+        for antecedents, descriptiveRules in groupedByAntecedent.items():
+            for i in range(regionNameLen):
+                if descriptiveRules[i] is not None:
+                    if (i == regionNameLen - 1) or (descriptiveRules[i + 1] is not None):
+                        decisionRules.append(
+                            self.genDecisionRule(
+                                transitionPairs,
+                                descriptiveRules[i],
+                                delta_u_consequent
+                            )
+                        )
+        return decisionRules
+
+    def generateDecisionControlSystem(self, transitionPairs, U, delta_u_consequent):
+        """
+        Based on the simple version of the WM algorithm
+        Generate a decision control system. This is the function that should be called externally for the most part
+        """
+        groupedByAntecedents = self.groupByAntecedents(U)
+        decRules = self.createDecisionRules(transitionPairs, groupedByAntecedents, delta_u_consequent)
+        return ctrl.ControlSystem(decRules)
+
+    def createSimilarityDecisionRules(self, transitionPairs, groupedByConsequent, delta_u_consequent, U, threshold=0):
+        """
+        Based on the general version of the WM algorithm
+        Create all decision rules
+        """
+        rules = []
+        similarities = []
+        maxVals = []
+        for pair in transitionPairs.items():
+            for Rminus in groupedByConsequent[pair[0]]:
+                for Rplus in groupedByConsequent[pair[1]]:
+
+                    AMinus = self.list_obj[U][Rminus[U]]  # B- for both
+                    APlus = self.list_obj[U][Rminus[U]]
+                    jaccardSimilarity = 0
+                    for i in range(len(Rminus) - 1):
+                        if i != U:
+                            AiMinus = self.list_obj[i][Rminus[i]]
+                            AiPlus = self.list_obj[i][Rplus[i]]
+
+                            jaccardSimilarity += fuzz.fuzzy_similarity(
+                                AiMinus.mf,
+                                AiPlus.mf
+                            )
+
+                            AMinus &= AiMinus
+                            APlus &= AiPlus
+
+                    jaccardSimilarity *= 1 / (len(Rminus) - 2)  # exclude consequent and u
+
+                    from copy import copy
+                    trapConsequent = copy(delta_u_consequent[self.drs(pair[0], pair[1])])
+                    trapmf = trapConsequent.mf
+                    traptop = max(trapmf)
+
+                    similarities.append(jaccardSimilarity)
+                    maxVals.append(traptop)
+
+                    trapmf[trapmf > jaccardSimilarity] = jaccardSimilarity
+
+                    minTop = min(traptop, jaccardSimilarity)
+                    if minTop > threshold: # only rules that will actually help. determined by threshold param
+                        TMRule = ctrl.Rule(AMinus, trapConsequent)
+                        PMRule = ctrl.Rule(APlus, trapConsequent)
+                        rules += [TMRule, PMRule]
+
+        print(f"Jaccard similarities for {len(similarities)} rules")
+        plt.hist(similarities)
+        plt.show()
+
+        print(f"Maximum values of trapezoidal mf for {len(similarities)} rules")
+        plt.hist(maxVals)
+        plt.show()
+
+        print(f"Threshold set at {threshold}, so only {len(rules)} rules placed in control system")
+        return rules
+
+    def generateSimilarityDecisionControlSystem(self, transitionPairs, U, delta_u_consequent, threshold=0):
+        """
+        Based on the general version of the WM algorithm.
+        Create the control system. This generates a very large control system
+        compared to `generateDecisionControlSystem()`
+        """
+        groupedByConsequent = self.groupByConsequent(U)
+        decRules = self.createSimilarityDecisionRules(transitionPairs, groupedByConsequent, delta_u_consequent, U, threshold=threshold)
+        return ctrl.ControlSystem(decRules)
+
+
 
 
