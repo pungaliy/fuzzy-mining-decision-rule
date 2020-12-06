@@ -891,17 +891,16 @@ class FuzzyObj:
 
                     jaccardSimilarity /= (len(Rminus) - 2)  # exclude consequent and u                    
 
-                    trapConsequent = delta_u_consequent[self.drs(pair[0], pair[1])]
-                    trapmf = trapConsequent.mf
-                    traptop = max(trapmf)
-
-                    similarities.append(jaccardSimilarity)
-                    maxVals.append(traptop)
-
-                    trapmf[trapmf > jaccardSimilarity] = jaccardSimilarity
-
                     if jaccardSimilarity > threshold: # only rules that will actually help. determined by threshold param
-                        print(Rminus)
+                        from copy import copy
+                        duc = copy(delta_u_consequent)
+
+                        trapConsequent = duc[self.drs(pair[0], pair[1])]
+                        trapmf = trapConsequent.mf
+                        traptop = max(trapmf)
+
+                        trapmf[trapmf > jaccardSimilarity] = jaccardSimilarity
+
                         TMRule = ctrl.Rule(AMinus, trapConsequent)
                         PMRule = ctrl.Rule(APlus, trapConsequent)
                         rules += [
@@ -909,13 +908,13 @@ class FuzzyObj:
                             PMRule,
                         ]
 
-        print(f"Jaccard similarities for {len(similarities)} rules")
-        plt.hist(similarities)
-        plt.show()
+#         print(f"Jaccard similarities for {len(similarities)} rules")
+#         plt.hist(similarities)
+#         plt.show()
 
-        print(f"Maximum values of trapezoidal mf for {len(similarities)} rules")
-        plt.hist(maxVals)
-        plt.show()
+#         print(f"Maximum values of trapezoidal mf for {len(similarities)} rules")
+#         plt.hist(maxVals)
+#         plt.show()
 
         print(f"Threshold set at {threshold}, so only {len(rules)} rules placed in control system")
         return rules
